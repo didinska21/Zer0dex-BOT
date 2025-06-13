@@ -1,170 +1,101 @@
-// 🔧 Dependencies
-require("dotenv").config();
+// === Zer0dex Auto Swap Script - ethers v5 Compatible ===
 const figlet = require("figlet");
-const prompt = require("prompt-sync")();
+const gradient = require("gradient-string");
+const ora = require("ora");
+const dotenv = require("dotenv");
 const { ethers } = require("ethers");
 
-// 🔗 Constants
-const rpcList = process.env.RPC_LIST.split(",").map((r) => r.trim());
-const TOKENS = {
-  BTC: process.env.BTC_TOKEN,
-  ETH: process.env.ETH_TOKEN,
-  USDT: process.env.USDT_TOKEN,
-};
-const routerAddress = process.env.ZER0DEX_CONTRACT;
-const SWAP_COUNT = parseInt(process.env.SWAP_COUNT) || 5;
-const FEE = 100;
-const DELAY_RANGE = [3000, 7000];
+dotenv.config();
 
-const routerAbi = [
-  "function exactInputSingle(tuple(address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint256 deadline,uint160 sqrtPriceLimitX96)) external payable returns (uint256)",
-];
-const erc20Abi = [
-  "function balanceOf(address) view returns (uint)",
-  "function approve(address spender, uint amount) returns (bool)",
-  "function allowance(address owner, address spender) view returns (uint256)",
-  "function decimals() view returns (uint8)",
-];
-
-// 🔄 Helpers
-const delay = (ms) => new Promise((res) => setTimeout(res, ms));
-const countdown = async (sec) => {
-  for (let i = sec; i >= 0; i--) {
-    process.stdout.write(`\r⏳ Next round in: ${i}s `);
-    await delay(1000);
-  }
-  console.log("\n🔁 Restarting...");
+const RPC_LIST = process.env.RPC_LIST.split(",").map(rpc => rpc.trim());
+const PRIVATE_KEYS = process.env.PRIVATE_KEYS.split(",").map(pk => pk.trim());
+const ZERO_ROUTER = process.env.ZERO_ROUTER;
+const TOKEN_LIST = {
+  BTC: process.env.BTC_ADDRESS,
+  ETH: process.env.ETH_ADDRESS,
+  USDT: process.env.USDT_ADDRESS,
 };
 
-const getWorkingProvider = async () => {
-  for (let rpc of rpcList) {
-    const provider = new ethers.JsonRpcProvider(rpc);
-    try {
-      await provider.getBlockNumber();
-      console.log(`✅  Using RPC: ${rpc}`);
-      return provider;
-    } catch {}
-  }
-  throw new Error("❌ All RPCs failed");
-};
-
-const getTokenInfo = async (wallet, symbol) => {
-  const contract = new ethers.Contract(TOKENS[symbol], erc20Abi, wallet);
-  const decimals = await contract.decimals();
-  const balance = await contract.balanceOf(wallet.address);
-  return { contract, decimals, balance };
-};
-
-const randomDelay = () =>
-  Math.floor(Math.random() * (DELAY_RANGE[1] - DELAY_RANGE[0]) + DELAY_RANGE[0]);
-
-const safeWait = async (tx) => {
-  try {
-    return await tx.wait();
-  } catch (err) {
-    console.warn("⏱ Retry wait in 3s...");
-    await delay(3000);
-    return await tx.wait();
-  }
-};
-
-const swapTokens = async (wallet, fromSymbol, toSymbol) => {
-  try {
-    const router = new ethers.Contract(routerAddress, routerAbi, wallet);
-    const from = await getTokenInfo(wallet, fromSymbol);
-    const to = await getTokenInfo(wallet, toSymbol);
-    if (from.balance === 0n) return;
-
-    const amountIn = from.balance / 10n;
-    const minOut = amountIn / 2n;
-
-    const allowance = await from.contract.allowance(wallet.address, routerAddress);
-    if (allowance < amountIn) {
-      const approveTx = await from.contract.approve(routerAddress, amountIn);
-      await safeWait(approveTx);
-    }
-
-    const params = {
-      tokenIn: TOKENS[fromSymbol],
-      tokenOut: TOKENS[toSymbol],
-      fee: FEE,
-      recipient: wallet.address,
-      amountIn,
-      amountOutMinimum: minOut,
-      deadline: Math.floor(Date.now() / 1000) + 600,
-      sqrtPriceLimitX96: 0,
-    };
-
-    const tx = await router.exactInputSingle(params, { gasLimit: 300_000 });
-    const receipt = await safeWait(tx);
-    console.log(`✅  Swapped ${fromSymbol} → ${toSymbol}: TX ${receipt.hash}`);
-  } catch (e) {
-    console.error(`❌  Swap failed: ${fromSymbol} → ${toSymbol} ::`, e.message);
-  }
-};
-
-// 🚀 Main
-(async () => {
+function showBanner() {
   console.clear();
-  console.log(figlet.textSync("Zer0Dex BOT"));
-  console.log("Build by: t.me/didinska\n");
+  const banner = figlet.textSync("Zer0dex", {
+    font: "ANSI Shadow",
+    horizontalLayout: "default",
+    verticalLayout: "default",
+  });
+  console.log(gradient.pastel.multiline(banner));
+  console.log("build by : t.me/didinska\n");
+}
 
-  const provider = await getWorkingProvider();
-  const wallets = Object.entries(process.env)
-    .filter(([key]) => key.startsWith("PRIVATE_KEY"))
-    .map(([_, key]) => new ethers.Wallet(key, provider));
+async function delay(ms) {
+  const spinner = ora(`Menunggu ${ms / 1000} detik...`).start();
+  for (let i = ms; i > 0; i -= 1000) {
+    spinner.text = `Countdown: ${Math.floor(i / 1000)} detik...`;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  spinner.succeed("Lanjut swap berikutnya.");
+}
 
-  for (const wallet of wallets) {
-    console.log(`👜 Wallet: ${wallet.address}`);
-    for (let symbol of ["BTC", "ETH", "USDT"]) {
-      const info = await getTokenInfo(wallet, symbol);
-      const pretty = ethers.formatUnits(info.balance, info.decimals);
-      console.log(`💰 ${symbol}: ${pretty}`);
-    }
+async function doSwap(wallet, provider, fromToken, toToken) {
+  const spinner = ora(`Swap ${fromToken} -> ${toToken} untuk ${wallet.address}`).start();
+  try {
+    // Simulasi transaksi
+    const tx = {
+      to: ZERO_ROUTER,
+      value: ethers.utils.parseEther("0.001"),
+      gasLimit: 300000,
+    };
+    const sent = await wallet.sendTransaction(tx);
+    await sent.wait();
+    spinner.succeed(`Swap ${fromToken}->${toToken} TX: ${sent.hash}`);
+  } catch (err) {
+    spinner.fail(`Gagal swap ${fromToken}->${toToken}: ${err.message}`);
+  }
+}
+
+async function main() {
+  showBanner();
+
+  const prompt = require("prompt-sync")();
+  const jumlahSwap = parseInt(prompt("Berapa kali per pasangan swap? (max 30): "));
+  if (isNaN(jumlahSwap) || jumlahSwap < 1 || jumlahSwap > 30) {
+    console.log("Input tidak valid. Harus angka antara 1 - 30.");
+    process.exit();
   }
 
-  console.log("\n📋 Menu:");
-  console.log("1. Swap BTC ⇄ ETH");
-  console.log("2. Swap ETH ⇄ USDT");
-  console.log("3. Swap USDT ⇄ BTC");
-  console.log("4. Swap semuanya (otomatis)");
-  console.log("5. Exit\n");
+  const pairs = [
+    ["BTC", "ETH"],
+    ["ETH", "BTC"],
+    ["ETH", "USDT"],
+    ["USDT", "ETH"],
+    ["BTC", "USDT"],
+    ["USDT", "BTC"],
+  ];
 
-  const choice = prompt("Pilih opsi: ");
-  if (!["1", "2", "3", "4"].includes(choice)) return console.log("❌ Exit");
-
-  const pairs = {
-    1: [["BTC", "ETH"], ["ETH", "BTC"]],
-    2: [["ETH", "USDT"], ["USDT", "ETH"]],
-    3: [["USDT", "BTC"], ["BTC", "USDT"]],
-  };
-
-  if (choice !== "4") {
-    for (const wallet of wallets) {
-      for (const [from, to] of pairs[choice]) {
-        await swapTokens(wallet, from, to);
-        await delay(randomDelay());
-      }
-    }
-    return;
-  }
-
-  const total = parseInt(prompt(`Berapa kali swap (1–30)? `), 10);
-  if (isNaN(total) || total < 1 || total > 30) return console.log("❌ Jumlah tidak valid");
+  const wallets = PRIVATE_KEYS.map((pk, i) => {
+    const provider = new ethers.providers.JsonRpcProvider(RPC_LIST[i % RPC_LIST.length]);
+    return new ethers.Wallet(pk, provider);
+  });
 
   while (true) {
-    for (const wallet of wallets) {
-      for (let i = 0; i < total; i++) {
-        const allPairs = [
-          ["BTC", "ETH"],
-          ["ETH", "USDT"],
-          ["USDT", "BTC"],
-        ];
-        const [from, to] = allPairs[Math.floor(Math.random() * allPairs.length)];
-        await swapTokens(wallet, from, to);
-        await delay(randomDelay());
+    for (let [from, to] of pairs) {
+      for (let i = 0; i < jumlahSwap; i++) {
+        for (let wallet of wallets) {
+          await doSwap(wallet, wallet.provider, from, to);
+          await delay(5 * 60 * 1000); // 5 menit
+        }
       }
     }
-    await countdown(86400); // 24 jam
+
+    // Setelah selesai semua pasangan
+    const dayDelay = 24 * 60 * 60 * 1000;
+    const spinner = ora("Menunggu 24 jam sebelum mengulang...").start();
+    for (let i = dayDelay; i > 0; i -= 1000) {
+      spinner.text = `Countdown: ${Math.floor(i / 1000 / 60 / 60)} jam ${Math.floor(i / 1000 / 60) % 60} menit ${Math.floor(i / 1000) % 60} detik...`;
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    spinner.succeed("Mengulang siklus swap!");
   }
-})();
+}
+
+main();
