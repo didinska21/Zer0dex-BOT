@@ -1,63 +1,21 @@
-console.clear();
-console.log(`
-                      .^!!^.
-                  .:~7?7!7??7~:.
-               :^!77!~:..^^~7?J?!^.
-           .^!7??!^..  ..^^^^^~JJJJ7~:.
-           7?????: ...^!7?!^^^~JJJJJJJ?.
-           7?????:...^???J7^^^~JJJJJJJJ.
-           7?????:...^??7?7^^^~JJJJJJJ?.
-           7?????:...^~:.^~^^^~JJJJJJJ?.
-           7?????:.. .:^!7!~^^~7?JJJJJ?.
-           7?????:.:~JGP5YJJ?7!^^~7?JJ?.
-           7?7?JY??JJ5BBBBG5YJJ?7!~7JJ?.
-           7Y5GBBYJJJ5BBBBBBBGP5Y5PGP5J.
-           ^?PBBBP555PBBBBBBBBBBBB#BPJ~
-              :!YGB#BBBBBBBBBBBBGY7^
-                 .~?5BBBBBBBBPJ~.
-                     :!YGGY7:
-
- 🚀 Join channel: https://t.me/kingfeeder
-`);
-
+// 🔧 Dependencies
 require('dotenv').config();
+const figlet = require('figlet');
+const prompt = require('prompt-sync')();
 const { ethers } = require('ethers');
 
+// 🔗 Constants
 const rpcList = process.env.RPC_LIST.split(',').map(r => r.trim());
-const TOKENS = [
-  { symbol: 'USDT', address: process.env.USDT_TOKEN },
-  { symbol: 'BTC', address: process.env.BTC_TOKEN },
-  { symbol: 'ETH', address: process.env.ETH_TOKEN }
-];
-const pairs = [
-  ["ETH", "BTC"],
-  ["ETH", "USDT"],
-  ["BTC", "USDT"]
-];
+const TOKENS = {
+  BTC: process.env.BTC_TOKEN,
+  ETH: process.env.ETH_TOKEN,
+  USDT: process.env.USDT_TOKEN
+};
 const FEE = 100;
 const routerAddress = '0xb95B5953FF8ee5D5d9818CdbEfE363ff2191318c';
-const dexAddress = process.env.ZER0DEX_CONTRACT;
 
 const routerAbi = [
   "function exactInputSingle(tuple(address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint256 deadline,uint160 sqrtPriceLimitX96)) external payable returns (uint256)"
-];
-const dexAbi = [
-  {
-    "inputs": [{ "components": [
-      { "internalType": "address", "name": "token0", "type": "address" },
-      { "internalType": "address", "name": "token1", "type": "address" },
-      { "internalType": "uint24", "name": "fee", "type": "uint24" },
-      { "internalType": "int24", "name": "tickLower", "type": "int24" },
-      { "internalType": "int24", "name": "tickUpper", "type": "int24" },
-      { "internalType": "uint256", "name": "amount0Desired", "type": "uint256" },
-      { "internalType": "uint256", "name": "amount1Desired", "type": "uint256" },
-      { "internalType": "uint256", "name": "amount0Min", "type": "uint256" },
-      { "internalType": "uint256", "name": "amount1Min", "type": "uint256" },
-      { "internalType": "address", "name": "recipient", "type": "address" },
-      { "internalType": "uint256", "name": "deadline", "type": "uint256" }
-    ], "internalType": "struct MintParams", "name": "params", "type": "tuple" }],
-    "name": "mint", "outputs": [], "stateMutability": "nonpayable", "type": "function"
-  }
 ];
 const erc20Abi = [
   "function balanceOf(address) view returns (uint)",
@@ -66,14 +24,16 @@ const erc20Abi = [
   "function decimals() view returns (uint8)"
 ];
 
-const getRandomPair = () => {
-  let i = Math.floor(Math.random() * TOKENS.length);
-  let j;
-  do { j = Math.floor(Math.random() * TOKENS.length); } while (j === i);
-  return [TOKENS[i], TOKENS[j]];
+// 🔄 Helpers
+const delay = ms => new Promise(res => setTimeout(res, ms));
+const countdown = async (seconds) => {
+  for (let i = seconds; i >= 0; i--) {
+    process.stdout.write(`\r⏳ Next round in: ${i}s `);
+    await delay(1000);
+  }
+  console.log("\n🔁 Restarting...");
 };
-const getRandomDelay = (min = 10, max = 20) => new Promise(r => setTimeout(r, Math.random() * (max - min) * 1000 + min * 1000));
-const getRandomPercent = (min = 10, max = 15) => Math.floor(Math.random() * (max - min + 1)) + min;
+
 const getWorkingProvider = async () => {
   for (let rpc of rpcList) {
     const provider = new ethers.JsonRpcProvider(rpc);
@@ -81,111 +41,104 @@ const getWorkingProvider = async () => {
       await provider.getBlockNumber();
       console.log(`✅ Using RPC: ${rpc}`);
       return provider;
-    } catch (e) {
-      console.warn(`⚠️ RPC error: ${rpc} → ${e.message}`);
-    }
+    } catch {}
   }
-  throw new Error("❌ Semua RPC gagal!");
-};
-const withRetry = async (fn, retries = 3, label = '') => {
-  for (let i = 1; i <= retries; i++) {
-    try {
-      return await fn();
-    } catch (e) {
-      const msg = e?.shortMessage || e?.message || e;
-      console.warn(`${label} ❌ Attempt ${i}: ${msg}`);
-      if (i === retries) throw e;
-      await new Promise(r => setTimeout(r, 2000));
-    }
-  }
+  throw new Error("❌ All RPC failed");
 };
 
+const getTokenInfo = async (wallet, symbol) => {
+  const contract = new ethers.Contract(TOKENS[symbol], erc20Abi, wallet);
+  const decimals = await contract.decimals();
+  const balance = await contract.balanceOf(wallet.address);
+  return { contract, decimals, balance };
+};
+
+const swapTokens = async (wallet, fromSymbol, toSymbol) => {
+  const provider = wallet.provider;
+  const router = new ethers.Contract(routerAddress, routerAbi, wallet);
+  const from = await getTokenInfo(wallet, fromSymbol);
+  const to = await getTokenInfo(wallet, toSymbol);
+  if (from.balance === 0n) return;
+
+  const amountIn = from.balance / 10n;
+  const minOut = amountIn / 2n;
+  const allowance = await from.contract.allowance(wallet.address, routerAddress);
+
+  if (allowance < amountIn) {
+    const tx = await from.contract.approve(routerAddress, amountIn);
+    await tx.wait();
+  }
+
+  const params = {
+    tokenIn: TOKENS[fromSymbol],
+    tokenOut: TOKENS[toSymbol],
+    fee: FEE,
+    recipient: wallet.address,
+    amountIn,
+    amountOutMinimum: minOut,
+    sqrtPriceLimitX96: 0,
+    deadline: BigInt(Math.floor(Date.now() / 1000) + 600)
+  };
+
+  const tx = await router.exactInputSingle(params, { gasLimit: 300000n });
+  const rcpt = await tx.wait();
+  console.log(`✅ Swapped ${fromSymbol} → ${toSymbol}: TX ${rcpt.hash}`);
+};
+
+// 🚀 Main
 (async () => {
-  const swapCount = parseInt(process.env.SWAP_COUNT || '3', 10);
-  const wallets = Object.entries(process.env).filter(([k, v]) => k.startsWith("PRIVATE_KEY") && v.startsWith("0x")).map(([_, v]) => v);
-  if (!wallets.length) return console.error("❌ PRIVATE_KEY tidak ditemukan.");
+  console.clear();
+  console.log(figlet.textSync("Zer0Dex BOT"));
+  console.log("Build by: t.me/didinska\n");
 
-  for (let w = 0; w < wallets.length; w++) {
-    const provider = await getWorkingProvider();
-    const wallet = new ethers.Wallet(wallets[w], provider);
-    const address = await wallet.getAddress();
-    console.log(`\n👜 Wallet #${w + 1}: ${address}`);
-    const router = new ethers.Contract(routerAddress, routerAbi, wallet);
-    const dex = new ethers.Contract(dexAddress, dexAbi, wallet);
+  const provider = await getWorkingProvider();
+  const wallets = Object.entries(process.env).filter(([k]) => k.startsWith("PRIVATE_KEY"))
+    .map(([_, v]) => new ethers.Wallet(v, provider));
 
-    for (let i = 0; i < swapCount; i++) {
-      const [from, to] = getRandomPair();
-      const token = new ethers.Contract(from.address, erc20Abi, wallet);
-      const decimals = await withRetry(() => token.decimals(), 3, `decimals ${from.symbol}`);
-      const balance = await withRetry(() => token.balanceOf(address), 3, `balance ${from.symbol}`);
-      if (balance === 0n) continue;
+  const wallet = wallets[0];
+  const address = await wallet.getAddress();
+  console.log(`👜 Wallet: ${address}`);
 
-      const amountIn = BigInt(Math.floor(Number(balance) * (Math.random() * 0.04 + 0.01)));
-      if (amountIn === 0n) continue;
-      const minOut = amountIn / 2n;
-      const allowance = await withRetry(() => token.allowance(address, routerAddress), 3, `allowance ${from.symbol}`);
+  for (let symbol of ['BTC', 'ETH', 'USDT']) {
+    const info = await getTokenInfo(wallet, symbol);
+    console.log(`💰 ${symbol}: ${ethers.formatUnits(info.balance, info.decimals)}`);
+  }
 
-      if (allowance < amountIn) {
-        await withRetry(async () => {
-          const tx = await token.approve(routerAddress, amountIn);
-          await tx.wait();
-        }, 3, `approve ${from.symbol}`);
+  console.log("\n📋 Menu:");
+  console.log("1. Swap BTC ⇄ ETH");
+  console.log("2. Swap ETH ⇄ USDT");
+  console.log("3. Swap USDT ⇄ BTC");
+  console.log("4. Swap semuanya (otomatis)");
+  console.log("5. Exit\n");
+
+  const choice = prompt("Pilih opsi: ");
+  if (choice === '1') {
+    await swapTokens(wallet, 'BTC', 'ETH');
+    await swapTokens(wallet, 'ETH', 'BTC');
+  } else if (choice === '2') {
+    await swapTokens(wallet, 'ETH', 'USDT');
+    await swapTokens(wallet, 'USDT', 'ETH');
+  } else if (choice === '3') {
+    await swapTokens(wallet, 'USDT', 'BTC');
+    await swapTokens(wallet, 'BTC', 'USDT');
+  } else if (choice === '4') {
+    const total = parseInt(prompt("Berapa kali swap (1–30)? "), 10);
+    if (isNaN(total) || total < 1 || total > 30) return console.log("❌ Jumlah tidak valid");
+
+    while (true) {
+      for (let i = 0; i < total; i++) {
+        const pairs = [['BTC', 'ETH'], ['ETH', 'USDT'], ['USDT', 'BTC']];
+        const [from, to] = pairs[Math.floor(Math.random() * pairs.length)];
+        await swapTokens(wallet, from, to);
+        await delay(5000);
       }
-
-      const params = {
-        tokenIn: from.address,
-        tokenOut: to.address,
-        fee: FEE,
-        recipient: address,
-        amountIn,
-        amountOutMinimum: minOut,
-        sqrtPriceLimitX96: 0,
-        deadline: BigInt(Math.floor(Date.now() / 1000) + 600)
-      };
-
-      console.log(`🔄 Swap ${from.symbol} → ${to.symbol} = ${ethers.formatUnits(amountIn, decimals)}`);
-      await withRetry(async () => {
-        const tx = await router.exactInputSingle(params, { gasLimit: 300000n });
-        const rcpt = await tx.wait();
-        console.log(`✅ TX: ${rcpt.hash}`);
-      }, 3, `swap ${from.symbol}→${to.symbol}`);
-      await getRandomDelay(55, 65);
+      await countdown(86400); // 24 jam
     }
-
-    const runs = Math.floor(Math.random() * 5) + 1;
-    console.log(`\n💧 Add liquidity ${runs}x`);
-
-    for (let r = 1; r <= runs; r++) {
-      const [n0, n1] = pairs[Math.floor(Math.random() * pairs.length)];
-      const a0 = process.env[`${n0}_TOKEN`], a1 = process.env[`${n1}_TOKEN`];
-      if (!a0 || !a1) continue;
-
-      const t0 = new ethers.Contract(a0, erc20Abi, wallet);
-      const t1 = new ethers.Contract(a1, erc20Abi, wallet);
-      const b0 = await t0.balanceOf(address), b1 = await t1.balanceOf(address);
-      if (b0 === 0n || b1 === 0n) continue;
-
-      const d0 = await t0.decimals(), d1 = await t1.decimals();
-      const amt0 = b0 * BigInt(getRandomPercent()) / 100n;
-      const amt1 = b1 * BigInt(getRandomPercent()) / 100n;
-
-      console.log(`→ Add ${n0}/${n1}: ${ethers.formatUnits(amt0, d0)} ${n0} + ${ethers.formatUnits(amt1, d1)} ${n1}`);
-      await withRetry(() => t0.approve(dexAddress, amt0), 3, `approve ${n0}`);
-      await withRetry(() => t1.approve(dexAddress, amt1), 3, `approve ${n1}`);
-
-      const deadline = Math.floor(Date.now() / 1000) + 600;
-      const mintParams = [a0, a1, 3000, -887220, 887220, amt0, amt1, 0, 0, address, deadline];
-      await withRetry(async () => {
-        const tx = await dex.mint(mintParams, { gasLimit: 600000 });
-        console.log(`✅ Mint TX: ${tx.hash}`);
-        await tx.wait();
-        console.log(`🎉 Mint sukses`);
-      }, 3, `mint ${n0}/${n1}`);
-
-      if (r < runs) await getRandomDelay(55, 60);
-    }
-
-    console.log(`✅ Selesai untuk ${address}`);
-    if (w < wallets.length - 1) await new Promise(r => setTimeout(r, 3000));
+  } else if (choice === '5') {
+    console.log("👋 Keluar");
+    process.exit();
+  } else {
+    console.log("❌ Pilihan tidak valid");
+    process.exit();
   }
 })();
