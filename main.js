@@ -1,101 +1,113 @@
-// === Zer0dex Auto Swap Script - ethers v5 Compatible ===
+const ethers = require("ethers");
+const fs = require("fs");
 const figlet = require("figlet");
 const gradient = require("gradient-string");
 const ora = require("ora");
-const dotenv = require("dotenv");
-const { ethers } = require("ethers");
+require("dotenv").config();
+const readline = require("readline");
 
-dotenv.config();
+const ETH = process.env.ETH_TOKEN;
+const BTC = process.env.BTC_TOKEN;
+const USDT = process.env.USDT_TOKEN;
+const ZER0DEX_CONTRACT = process.env.ZER0DEX_CONTRACT;
 
-const RPC_LIST = process.env.RPC_LIST.split(",").map(rpc => rpc.trim());
-const PRIVATE_KEYS = process.env.PRIVATE_KEYS.split(",").map(pk => pk.trim());
-const ZERO_ROUTER = process.env.ZERO_ROUTER;
-const TOKEN_LIST = {
-  BTC: process.env.BTC_ADDRESS,
-  ETH: process.env.ETH_ADDRESS,
-  USDT: process.env.USDT_ADDRESS,
-};
+const RPC_LIST = process.env.RPC_LIST.split(",");
+const PRIVATE_KEYS = process.env.PRIVATE_KEYS.split(",");
+
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+});
 
 function showBanner() {
   console.clear();
   const banner = figlet.textSync("Zer0dex", {
     font: "ANSI Shadow",
-    horizontalLayout: "default",
-    verticalLayout: "default",
   });
   console.log(gradient.pastel.multiline(banner));
-  console.log("build by : t.me/didinska\n");
+  console.log("\x1b[90mbuild by : t.me/didinska\n\x1b[0m");
 }
 
-async function delay(ms) {
-  const spinner = ora(`Menunggu ${ms / 1000} detik...`).start();
-  for (let i = ms; i > 0; i -= 1000) {
-    spinner.text = `Countdown: ${Math.floor(i / 1000)} detik...`;
-    await new Promise(r => setTimeout(r, 1000));
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function countdownWithSpinner(seconds) {
+  let spinner = ora(`Countdown: ${seconds} detik...`).start();
+  for (let i = seconds; i >= 0; i--) {
+    spinner.text = `Countdown: ${i} detik...`;
+    await wait(1000);
   }
-  spinner.succeed("Lanjut swap berikutnya.");
+  spinner.succeed("Countdown selesai!");
 }
 
-async function doSwap(wallet, provider, fromToken, toToken) {
-  const spinner = ora(`Swap ${fromToken} -> ${toToken} untuk ${wallet.address}`).start();
+async function sendTx(wallet, tokenIn, tokenOut) {
+  const iface = new ethers.utils.Interface([
+    "function exactInputSingle((address,address,uint24,address,uint256,uint256,uint160)) returns (uint256)"
+  ]);
+  const provider = wallet.provider;
+  const contract = new ethers.Contract(ZER0DEX_CONTRACT, iface, wallet);
+  const value = ethers.utils.parseUnits("0.001", 18);
+  const params = {
+    tokenIn,
+    tokenOut,
+    fee: 3000,
+    recipient: await wallet.getAddress(),
+    deadline: Math.floor(Date.now() / 1000) + 60 * 20,
+    amountIn: value,
+    amountOutMinimum: 0,
+    sqrtPriceLimitX96: 0,
+  };
   try {
-    // Simulasi transaksi
-    const tx = {
-      to: ZERO_ROUTER,
-      value: ethers.utils.parseEther("0.001"),
-      gasLimit: 300000,
-    };
-    const sent = await wallet.sendTransaction(tx);
-    await sent.wait();
-    spinner.succeed(`Swap ${fromToken}->${toToken} TX: ${sent.hash}`);
-  } catch (err) {
-    spinner.fail(`Gagal swap ${fromToken}->${toToken}: ${err.message}`);
+    const tx = await contract.exactInputSingle(params);
+    console.log(`\u2714 Swap ${symbol(tokenIn)}->${symbol(tokenOut)} TX: ${tx.hash}`);
+    console.log(`🌐 Explorer: https://chainscan.galileo.0g.ai/tx/${tx.hash}\n`);
+    await tx.wait();
+  } catch (e) {
+    console.log("\u274C Error saat swap:", e.reason || e);
   }
 }
 
-async function main() {
-  showBanner();
+function symbol(address) {
+  if (address === ETH) return "ETH";
+  if (address === BTC) return "BTC";
+  if (address === USDT) return "USDT";
+  return "?";
+}
 
-  const prompt = require("prompt-sync")();
-  const jumlahSwap = parseInt(prompt("Berapa kali per pasangan swap? (max 30): "));
-  if (isNaN(jumlahSwap) || jumlahSwap < 1 || jumlahSwap > 30) {
-    console.log("Input tidak valid. Harus angka antara 1 - 30.");
-    process.exit();
-  }
-
+async function startBot(n) {
   const pairs = [
-    ["BTC", "ETH"],
-    ["ETH", "BTC"],
-    ["ETH", "USDT"],
-    ["USDT", "ETH"],
-    ["BTC", "USDT"],
-    ["USDT", "BTC"],
+    [BTC, ETH],
+    [ETH, BTC],
+    [ETH, USDT],
+    [USDT, ETH],
+    [BTC, USDT],
+    [USDT, BTC],
   ];
-
-  const wallets = PRIVATE_KEYS.map((pk, i) => {
-    const provider = new ethers.providers.JsonRpcProvider(RPC_LIST[i % RPC_LIST.length]);
-    return new ethers.Wallet(pk, provider);
-  });
-
   while (true) {
-    for (let [from, to] of pairs) {
-      for (let i = 0; i < jumlahSwap; i++) {
-        for (let wallet of wallets) {
-          await doSwap(wallet, wallet.provider, from, to);
-          await delay(5 * 60 * 1000); // 5 menit
+    for (let [tokenIn, tokenOut] of pairs) {
+      for (let i = 0; i < n; i++) {
+        for (let key of PRIVATE_KEYS) {
+          const provider = new ethers.providers.JsonRpcProvider(
+            RPC_LIST[Math.floor(Math.random() * RPC_LIST.length)]
+          );
+          const wallet = new ethers.Wallet(key, provider);
+          await sendTx(wallet, tokenIn, tokenOut);
+          await countdownWithSpinner(300);
         }
       }
     }
-
-    // Setelah selesai semua pasangan
-    const dayDelay = 24 * 60 * 60 * 1000;
-    const spinner = ora("Menunggu 24 jam sebelum mengulang...").start();
-    for (let i = dayDelay; i > 0; i -= 1000) {
-      spinner.text = `Countdown: ${Math.floor(i / 1000 / 60 / 60)} jam ${Math.floor(i / 1000 / 60) % 60} menit ${Math.floor(i / 1000) % 60} detik...`;
-      await new Promise(r => setTimeout(r, 1000));
-    }
-    spinner.succeed("Mengulang siklus swap!");
+    await countdownWithSpinner(86400); // 24 jam
   }
 }
 
-main();
+showBanner();
+rl.question("Berapa kali per pasangan swap? (max 30): ", async answer => {
+  const n = Math.min(parseInt(answer), 30);
+  if (isNaN(n) || n <= 0) {
+    console.log("Input tidak valid.");
+    process.exit(1);
+  }
+  await startBot(n);
+  rl.close();
+});
