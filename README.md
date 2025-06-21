@@ -2,7 +2,7 @@
 
 Zer0dex-BOT adalah bot sederhana berbasis Node.js yang digunakan untuk melakukan operasi DeFi (seperti swap atau add liquidity) menggunakan Zer0dex protocol.
 
-## ðŸ“¦ Instalasi
+## Instalasi
 
 ### 1. Clone Repository
 ```bash
@@ -39,7 +39,7 @@ Simpan file dengan kombinasi:
 Ctrl + X, lalu tekan Y dan Enter
 ```
 
-## ðŸš€ Menjalankan Bot
+## Menjalankan Bot
 
 Jalankan dengan perintah berikut:
 ```bash
@@ -48,7 +48,7 @@ node main.js
 
 ---
 
-## ðŸ“– Lisensi
+## Lisensi
 Proyek ini dilisensikan di bawah MIT License.
 
 ---
