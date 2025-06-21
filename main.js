@@ -91,7 +91,7 @@ const withRetry = async (fn, retries = 3, label = '') => {
 };
 
 async function doSwap() {
-  const wallets = Object.entries(process.env).filter(([k, v]) => k.startsWith("PRIVATE_KEY")).map(([_, v]) => v);
+  const wallets = Object.entries(process.env).filter(([k]) => k.startsWith("PRIVATE_KEY")).map(([_, v]) => v);
   for (let pk of wallets) {
     const provider = await getWorkingProvider();
     const wallet = new ethers.Wallet(pk, provider);
@@ -101,8 +101,8 @@ async function doSwap() {
     const token = new ethers.Contract(from.address, erc20Abi, wallet);
     const decimals = await token.decimals();
     const balance = await token.balanceOf(address);
-    const percent = BigInt(Math.floor(Math.random() * 4 + 1));
-    const amountIn = balance * percent / 100n;
+    const percent = Math.floor(Math.random() * 4 + 1);
+    const amountIn = balance * BigInt(percent) / 100n;
     const minOut = amountIn / 2n;
     if (amountIn === 0n) continue;
     const allowance = await token.allowance(address, routerAddress);
@@ -127,7 +127,7 @@ async function doSwap() {
 }
 
 async function doAddPool() {
-  const wallets = Object.entries(process.env).filter(([k, v]) => k.startsWith("PRIVATE_KEY")).map(([_, v]) => v);
+  const wallets = Object.entries(process.env).filter(([k]) => k.startsWith("PRIVATE_KEY")).map(([_, v]) => v);
   for (let pk of wallets) {
     const provider = await getWorkingProvider();
     const wallet = new ethers.Wallet(pk, provider);
@@ -138,9 +138,10 @@ async function doAddPool() {
     const t0 = new ethers.Contract(a0, erc20Abi, wallet);
     const t1 = new ethers.Contract(a1, erc20Abi, wallet);
     const b0 = await t0.balanceOf(address), b1 = await t1.balanceOf(address);
-    const d0 = await t0.decimals(), d1 = await t1.decimals();
-    const amt0 = b0 * BigInt(Math.floor(Math.random() * 6 + 5)) / 100n;
-    const amt1 = b1 * BigInt(Math.floor(Math.random() * 6 + 5)) / 100n;
+    const percent0 = Math.floor(Math.random() * 6 + 5);
+    const percent1 = Math.floor(Math.random() * 6 + 5);
+    const amt0 = b0 * BigInt(percent0) / 100n;
+    const amt1 = b1 * BigInt(percent1) / 100n;
     if (amt0 === 0n || amt1 === 0n) continue;
     if ((await t0.allowance(address, dexAddress)) < amt0) await (await t0.approve(dexAddress, amt0)).wait();
     if ((await t1.allowance(address, dexAddress)) < amt1) await (await t1.approve(dexAddress, amt1)).wait();
@@ -154,22 +155,25 @@ async function doAddPool() {
 
 (async () => {
   showBanner();
-  const choice = await showMenu();
-
-  if (choice === "1") {
-    const repeat = parseInt(await ask("Berapa kali ulangi swap? "), 10);
-    for (let i = 1; i <= repeat; i++) {
-      console.log(`\n🔁 Swap ke-${i}`);
-      await doSwap();
+  while (true) {
+    const choice = await showMenu();
+    if (choice === "1") {
+      const repeat = parseInt(await ask("Berapa kali ulangi swap? "), 10);
+      for (let i = 1; i <= repeat; i++) {
+        console.log(`\n🔁 Swap ke-${i}`);
+        await doSwap();
+      }
+    } else if (choice === "2") {
+      const repeat = parseInt(await ask("Berapa kali ulangi add pool? "), 10);
+      for (let i = 1; i <= repeat; i++) {
+        console.log(`\n🔁 Add Pool ke-${i}`);
+        await doAddPool();
+      }
+    } else if (choice === "3") {
+      console.log("👋 Keluar...");
+      process.exit(0);
+    } else {
+      console.log("❌ Pilihan tidak valid.");
     }
-  } else if (choice === "2") {
-    const repeat = parseInt(await ask("Berapa kali ulangi add pool? "), 10);
-    for (let i = 1; i <= repeat; i++) {
-      console.log(`\n🔁 Add Pool ke-${i}`);
-      await doAddPool();
-    }
-  } else {
-    console.log("👋 Keluar...");
-    process.exit(0);
   }
 })();
