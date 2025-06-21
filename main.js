@@ -79,18 +79,6 @@ const getWorkingProvider = async () => {
   throw new Error("❌ Semua RPC gagal!");
 };
 
-const withRetry = async (fn, retries = 3, label = '') => {
-  for (let i = 0; i < retries; i++) {
-    try { return await fn(); }
-    catch (e) {
-      console.warn(`${label} ❌ Attempt ${i + 1}: ${e.message}`);
-      if (i === retries - 1) throw e;
-      await new Promise(r => setTimeout(r, 1000));
-    }
-  }
-};
-
-async function doSwap() {
 async function doSwap() {
   const wallets = Object.entries(process.env)
     .filter(([k]) => k.startsWith("PRIVATE_KEY"))
@@ -108,8 +96,8 @@ async function doSwap() {
 
     const token = new ethers.Contract(from.address, erc20Abi, wallet);
     const balanceRaw = await token.balanceOf(address);
-    const balance = BigInt(balanceRaw); // Pastikan jadi BigInt
-    const percent = Math.floor(Math.random() * 4 + 1); // antara 1% - 4%
+    const balance = BigInt(balanceRaw);
+    const percent = Math.floor(Math.random() * 4 + 1);
     const amountIn = (balance * BigInt(percent)) / 100n;
     const minOut = amountIn / 2n;
 
@@ -147,53 +135,67 @@ async function doSwap() {
 }
 
 async function doAddPool() {
-  const wallets = Object.entries(process.env).filter(([k]) => k.startsWith("PRIVATE_KEY")).map(([_, v]) => v);
+  const wallets = Object.entries(process.env)
+    .filter(([k]) => k.startsWith("PRIVATE_KEY"))
+    .map(([_, v]) => v);
+
   for (let pk of wallets) {
     const provider = await getWorkingProvider();
     const wallet = new ethers.Wallet(pk, provider);
     const address = await wallet.getAddress();
     const dex = new ethers.Contract(dexAddress, dexAbi, wallet);
+
     const [n0, n1] = pairs[Math.floor(Math.random() * pairs.length)];
     const a0 = process.env[`${n0}_TOKEN`], a1 = process.env[`${n1}_TOKEN`];
     const t0 = new ethers.Contract(a0, erc20Abi, wallet);
     const t1 = new ethers.Contract(a1, erc20Abi, wallet);
-    const b0 = await t0.balanceOf(address), b1 = await t1.balanceOf(address);
-    const percent0 = Math.floor(Math.random() * 6 + 5);
-    const percent1 = Math.floor(Math.random() * 6 + 5);
-    const amt0 = b0 * BigInt(percent0) / 100n;
-    const amt1 = b1 * BigInt(percent1) / 100n;
-    if (amt0 === 0n || amt1 === 0n) continue;
-    if ((await t0.allowance(address, dexAddress)) < amt0) await (await t0.approve(dexAddress, amt0)).wait();
-    if ((await t1.allowance(address, dexAddress)) < amt1) await (await t1.approve(dexAddress, amt1)).wait();
+    const b0 = BigInt(await t0.balanceOf(address));
+    const b1 = BigInt(await t1.balanceOf(address));
+    const amt0 = b0 * BigInt(Math.floor(Math.random() * 6 + 5)) / 100n;
+    const amt1 = b1 * BigInt(Math.floor(Math.random() * 6 + 5)) / 100n;
+
+    if (amt0 === 0n || amt1 === 0n) {
+      console.log("❌ Skip: Saldo tidak cukup");
+      continue;
+    }
+
+    if (BigInt(await t0.allowance(address, dexAddress)) < amt0)
+      await (await t0.approve(dexAddress, amt0)).wait();
+
+    if (BigInt(await t1.allowance(address, dexAddress)) < amt1)
+      await (await t1.approve(dexAddress, amt1)).wait();
+
     const deadline = Math.floor(Date.now() / 1000) + 600;
     const mintParams = [a0, a1, FEE, -887220, 887220, amt0, amt1, 0, 0, address, deadline];
-    const tx = await dex.mint(mintParams);
-    console.log(`✅ Mint TX: ${tx.hash}`);
-    await tx.wait();
+
+    try {
+      const tx = await dex.mint(mintParams);
+      console.log(`✅ Mint TX: ${tx.hash}`);
+      await tx.wait();
+    } catch (err) {
+      console.error(`❌ Gagal Add Pool: ${err.message}`);
+    }
   }
 }
 
 (async () => {
   showBanner();
-  while (true) {
-    const choice = await showMenu();
-    if (choice === "1") {
-      const repeat = parseInt(await ask("Berapa kali ulangi swap? "), 10);
-      for (let i = 1; i <= repeat; i++) {
-        console.log(`\n🔁 Swap ke-${i}`);
-        await doSwap();
-      }
-    } else if (choice === "2") {
-      const repeat = parseInt(await ask("Berapa kali ulangi add pool? "), 10);
-      for (let i = 1; i <= repeat; i++) {
-        console.log(`\n🔁 Add Pool ke-${i}`);
-        await doAddPool();
-      }
-    } else if (choice === "3") {
-      console.log("👋 Keluar...");
-      process.exit(0);
-    } else {
-      console.log("❌ Pilihan tidak valid.");
+  const choice = await showMenu();
+
+  if (choice === "1") {
+    const repeat = parseInt(await ask("Berapa kali ulangi swap? "), 10);
+    for (let i = 1; i <= repeat; i++) {
+      console.log(`\n🔁 Swap ke-${i}`);
+      await doSwap();
     }
+  } else if (choice === "2") {
+    const repeat = parseInt(await ask("Berapa kali ulangi add pool? "), 10);
+    for (let i = 1; i <= repeat; i++) {
+      console.log(`\n🔁 Add Pool ke-${i}`);
+      await doAddPool();
+    }
+  } else {
+    console.log("👋 Keluar...");
+    process.exit(0);
   }
 })();
