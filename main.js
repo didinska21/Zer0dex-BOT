@@ -1,14 +1,14 @@
 require('dotenv').config();
 const { ethers } = require('ethers');
+const { JsonRpcProvider } = require('@ethersproject/providers');
 const figlet = require("figlet");
 const gradient = require("gradient-string");
 
 const FEE = 100;
 const routerAddress = '0xb95B5953FF8ee5D5d9818CdbEfE363ff2191318c';
 
-// Validasi environment
 if (!process.env.RPC_LIST || !process.env.USDT_TOKEN || !process.env.BTC_TOKEN || !process.env.ETH_TOKEN || !process.env.ZER0DEX_CONTRACT) {
-  console.error("❌  Cek kembali .env — beberapa token address atau config belum diset.");
+  console.error("❌  .env tidak lengkap. Pastikan semua token dan RPC diisi.");
   process.exit(1);
 }
 
@@ -63,11 +63,13 @@ const getRandomPair = () => {
   const to = TOKENS.find(t => t.symbol === b);
   return [from, to];
 };
+
 const getRandomDelay = (min = 10, max = 20) => new Promise(r => setTimeout(r, Math.random() * (max - min) * 1000 + min * 1000));
 const getRandomPercent = (min = 10, max = 15) => Math.floor(Math.random() * (max - min + 1)) + min;
+
 const getWorkingProvider = async () => {
   for (let rpc of rpcList) {
-    const provider = new ethers.JsonRpcProvider(rpc);
+    const provider = new JsonRpcProvider(rpc);
     try {
       await provider.getBlockNumber();
       console.log(`✅  Using RPC: ${rpc}`);
@@ -78,6 +80,7 @@ const getWorkingProvider = async () => {
   }
   throw new Error("❌  Semua RPC gagal!");
 };
+
 const withRetry = async (fn, retries = 3, label = '') => {
   for (let i = 1; i <= retries; i++) {
     try {
@@ -132,11 +135,16 @@ const withRetry = async (fn, retries = 3, label = '') => {
         sqrtPriceLimitX96: 0,
         deadline: BigInt(Math.floor(Date.now() / 1000) + 600)
       };
-      console.log(`🔄 Swap ${from.symbol} → ${to.symbol} = ${ethers.formatUnits(amountIn, decimals)}`);
+      console.log(`🔄 Swap ${from.symbol} → ${to.symbol} = ${ethers.utils.formatUnits(amountIn, decimals)}`);
       await withRetry(async () => {
-        const tx = await router.exactInputSingle(params); // no gasLimit
+        const tx = await router.exactInputSingle(params);
+        console.log(`🚀  TX Sent: ${tx.hash}`);
         const rcpt = await tx.wait();
-        console.log(`✅  TX: ${rcpt.hash}`);
+        if (rcpt.status === 1) {
+          console.log(`✅  TX Confirmed: ${tx.hash}`);
+        } else {
+          console.error(`❌  TX Failed: ${tx.hash}`);
+        }
       }, 3, `swap ${from.symbol}→${to.symbol}`);
       await getRandomDelay(55, 65);
     }
@@ -154,7 +162,7 @@ const withRetry = async (fn, retries = 3, label = '') => {
       const d0 = await t0.decimals(), d1 = await t1.decimals();
       const amt0 = b0 * BigInt(getRandomPercent()) / 100n;
       const amt1 = b1 * BigInt(getRandomPercent()) / 100n;
-      console.log(`→ Add ${n0}/${n1}: ${ethers.formatUnits(amt0, d0)} ${n0} + ${ethers.formatUnits(amt1, d1)} ${n1}`);
+      console.log(`→ Add ${n0}/${n1}: ${ethers.utils.formatUnits(amt0, d0)} ${n0} + ${ethers.utils.formatUnits(amt1, d1)} ${n1}`);
 
       const a0Allow = await withRetry(() => t0.allowance(address, dexAddress), 3, `check allowance ${n0}`);
       if (a0Allow < amt0) await withRetry(() => t0.approve(dexAddress, amt0), 3, `approve ${n0}`);
@@ -165,18 +173,22 @@ const withRetry = async (fn, retries = 3, label = '') => {
       const mintParams = [a0, a1, 3000, -887220, 887220, amt0, amt1, 0, 0, address, deadline];
       await withRetry(async () => {
         const tx = await dex.mint(mintParams);
-        console.log(`✅  Mint TX: ${tx.hash}`);
-        await tx.wait();
-        console.log(`🎉 Mint sukses`);
+        console.log(`🚀  Mint TX Sent: ${tx.hash}`);
+        const rcpt = await tx.wait();
+        if (rcpt.status === 1) {
+          console.log(`🎉 Mint sukses: ${tx.hash}`);
+        } else {
+          console.error(`❌  Mint gagal: ${tx.hash}`);
+        }
       }, 3, `mint ${n0}/${n1}`);
       if (r < runs) await getRandomDelay(55, 60);
     }
+
     console.log(`✅  Selesai untuk ${address}`);
     if (w < wallets.length - 1) await new Promise(r => setTimeout(r, 3000));
   }
 })();
 
-// Tangkap error global
 process.on("unhandledRejection", err => {
   console.error("💥 Unhandled Rejection:", err);
   process.exit(1);
