@@ -5,7 +5,7 @@ const readline = require('readline');
 const figlet = require("figlet");
 const gradient = require("gradient-string");
 
-const FEE = 100;
+const FEE = 500; // 0.05% - pastikan cocok dengan pool yang tersedia
 const routerAddress = process.env.ROUTER_CONTRACT;
 const dexAddress = process.env.ZER0DEX_CONTRACT;
 
@@ -80,39 +80,24 @@ const getWorkingProvider = async () => {
 };
 
 async function doSwap() {
-  const wallets = Object.entries(process.env)
-    .filter(([k]) => k.startsWith("PRIVATE_KEY"))
-    .map(([_, v]) => v);
-
+  const wallets = Object.entries(process.env).filter(([k]) => k.startsWith("PRIVATE_KEY")).map(([_, v]) => v);
   for (let pk of wallets) {
     const provider = await getWorkingProvider();
     const wallet = new ethers.Wallet(pk, provider);
     const address = await wallet.getAddress();
     const router = new ethers.Contract(routerAddress, routerAbi, wallet);
-
-    const [from, to] = pairs[Math.floor(Math.random() * pairs.length)].map(
-      sym => TOKENS.find(t => t.symbol === sym)
-    );
-
+    const [from, to] = pairs[Math.floor(Math.random() * pairs.length)].map(sym => TOKENS.find(t => t.symbol === sym));
     const token = new ethers.Contract(from.address, erc20Abi, wallet);
-    const balanceRaw = await token.balanceOf(address);
-    const balance = BigInt(balanceRaw);
-    const percent = Math.floor(Math.random() * 4 + 1);
-    const amountIn = (balance * BigInt(percent)) / 100n;
-    const minOut = amountIn / 2n;
-
-    if (amountIn === 0n) {
-      console.log(`❌ Skip: Balance ${from.symbol} nol`);
-      continue;
-    }
-
+    const balance = await token.balanceOf(address);
+    const percent = Math.floor(Math.random() * 4 + 1); // hasil dalam number
+    const amountIn = balance.mul(percent).div(100); // semua pakai BigNumber
+    const minOut = amountIn.div(2);
+    if (amountIn.eq(0)) continue;
     const allowance = await token.allowance(address, routerAddress);
-    if (BigInt(allowance) < amountIn) {
-      console.log(`🔐 Approving ${from.symbol}...`);
-      const approveTx = await token.approve(routerAddress, amountIn);
-      await approveTx.wait();
+    if (allowance.lt(amountIn)) {
+      const tx = await token.approve(routerAddress, amountIn);
+      await tx.wait();
     }
-
     const params = {
       tokenIn: from.address,
       tokenOut: to.address,
@@ -121,59 +106,41 @@ async function doSwap() {
       amountIn,
       amountOutMinimum: minOut,
       sqrtPriceLimitX96: 0,
-      deadline: BigInt(Math.floor(Date.now() / 1000) + 600)
+      deadline: Math.floor(Date.now() / 1000) + 600
     };
-
-    try {
-      const tx = await router.exactInputSingle(params);
-      console.log(`✅ Swap TX: ${tx.hash}`);
-      await tx.wait();
-    } catch (err) {
-      console.error(`❌ Gagal swap: ${err.message}`);
-    }
+    const tx = await router.exactInputSingle(params);
+    console.log(`✅ Swap TX: ${tx.hash}`);
+    await tx.wait();
   }
 }
 
 async function doAddPool() {
-  const wallets = Object.entries(process.env)
-    .filter(([k]) => k.startsWith("PRIVATE_KEY"))
-    .map(([_, v]) => v);
-
+  const wallets = Object.entries(process.env).filter(([k]) => k.startsWith("PRIVATE_KEY")).map(([_, v]) => v);
   for (let pk of wallets) {
-    const provider = await getWorkingProvider();
-    const wallet = new ethers.Wallet(pk, provider);
-    const address = await wallet.getAddress();
-    const dex = new ethers.Contract(dexAddress, dexAbi, wallet);
-
-    const [n0, n1] = pairs[Math.floor(Math.random() * pairs.length)];
-    const a0 = process.env[`${n0}_TOKEN`], a1 = process.env[`${n1}_TOKEN`];
-    const t0 = new ethers.Contract(a0, erc20Abi, wallet);
-    const t1 = new ethers.Contract(a1, erc20Abi, wallet);
-    const b0 = BigInt(await t0.balanceOf(address));
-    const b1 = BigInt(await t1.balanceOf(address));
-    const amt0 = b0 * BigInt(Math.floor(Math.random() * 6 + 5)) / 100n;
-    const amt1 = b1 * BigInt(Math.floor(Math.random() * 6 + 5)) / 100n;
-
-    if (amt0 === 0n || amt1 === 0n) {
-      console.log("❌ Skip: Saldo tidak cukup");
-      continue;
-    }
-
-    if (BigInt(await t0.allowance(address, dexAddress)) < amt0)
-      await (await t0.approve(dexAddress, amt0)).wait();
-
-    if (BigInt(await t1.allowance(address, dexAddress)) < amt1)
-      await (await t1.approve(dexAddress, amt1)).wait();
-
-    const deadline = Math.floor(Date.now() / 1000) + 600;
-    const mintParams = [a0, a1, FEE, -887220, 887220, amt0, amt1, 0, 0, address, deadline];
-
     try {
-      const tx = await dex.mint(mintParams);
+      const provider = await getWorkingProvider();
+      const wallet = new ethers.Wallet(pk, provider);
+      const address = await wallet.getAddress();
+      const dex = new ethers.Contract(dexAddress, dexAbi, wallet);
+      const [n0, n1] = pairs[Math.floor(Math.random() * pairs.length)];
+      const a0 = process.env[`${n0}_TOKEN`], a1 = process.env[`${n1}_TOKEN`];
+      const t0 = new ethers.Contract(a0, erc20Abi, wallet);
+      const t1 = new ethers.Contract(a1, erc20Abi, wallet);
+      const b0 = await t0.balanceOf(address), b1 = await t1.balanceOf(address);
+      const amt0 = b0.mul(Math.floor(Math.random() * 6 + 5)).div(100);
+      const amt1 = b1.mul(Math.floor(Math.random() * 6 + 5)).div(100);
+      if (amt0.eq(0) || amt1.eq(0)) continue;
+      if ((await t0.allowance(address, dexAddress)).lt(amt0)) await (await t0.approve(dexAddress, amt0)).wait();
+      if ((await t1.allowance(address, dexAddress)).lt(amt1)) await (await t1.approve(dexAddress, amt1)).wait();
+      const deadline = Math.floor(Date.now() / 1000) + 600;
+      const tickLower = -120;
+      const tickUpper = 120;
+      const mintParams = [a0, a1, FEE, tickLower, tickUpper, amt0, amt1, 0, 0, address, deadline];
+      const tx = await dex.mint(mintParams, { gasLimit: 3000000 });
       console.log(`✅ Mint TX: ${tx.hash}`);
       await tx.wait();
     } catch (err) {
-      console.error(`❌ Gagal Add Pool: ${err.message}`);
+      console.error(`❌  Gagal Add Pool: ${err.reason || err.message}`);
     }
   }
 }
