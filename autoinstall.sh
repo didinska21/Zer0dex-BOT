@@ -1,27 +1,22 @@
 #!/bin/bash
 
-# === Banner ===
 echo "🚀 Zer0dex-BOT Auto Installer by Didin Ska"
 echo "==========================================="
 
-# === Clone Repo jika belum ada ===
 if [ ! -d "Zer0dex-BOT" ]; then
   git clone https://github.com/didinska21/Zer0dex-BOT.git
 fi
 
 cd Zer0dex-BOT || { echo "❌ Gagal masuk ke folder Zer0dex-BOT"; exit 1; }
 
-# === Install NPM jika belum ada ===
 if ! command -v npm &> /dev/null; then
   echo "📦 Menginstal npm..."
   sudo apt update && sudo apt install -y npm
 fi
 
-# === Install Dependency ===
 echo "📦 Menginstal dependency NPM..."
 npm install dotenv@16.5.0 figlet@1.8.1 ethers@5.8.0 gradient-string@1.2.0
 
-# === Konfigurasi .env jika belum ada ===
 if [ ! -f ".env" ]; then
   echo "📄 Membuat file .env..."
   cat <<EOF > .env
@@ -43,7 +38,6 @@ EOF
   echo "✅ File .env berhasil dibuat!"
 fi
 
-# === Input Private Key ===
 read -p "🔐 Masukkan PRIVATE KEY (0x...): " key
 
 if grep -q "PRIVATE_KEY_1=" .env; then
@@ -55,6 +49,6 @@ fi
 echo "✅ PRIVATE_KEY_1 berhasil ditambahkan ke .env!"
 sleep 1
 
-# === Jalankan Bot ===
+# Jalankan langsung
 echo -e "\n🚀 Menjalankan Zer0dex-BOT...\n"
 node main.js
