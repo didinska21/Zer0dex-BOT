@@ -5,21 +5,34 @@ const readline = require('readline');
 const figlet = require("figlet");
 const gradient = require("gradient-string");
 
-const FEE = 500; // 0.05% - pastikan cocok dengan pool yang tersedia
 const routerAddress = process.env.ROUTER_CONTRACT;
 const dexAddress = process.env.ZER0DEX_CONTRACT;
-
 const rpcList = process.env.RPC_LIST.split(',').map(r => r.trim());
+
 const TOKENS = [
   { symbol: 'USDT', address: process.env.USDT_TOKEN },
   { symbol: 'BTC', address: process.env.BTC_TOKEN },
   { symbol: 'ETH', address: process.env.ETH_TOKEN }
 ];
-const pairs = [["ETH", "BTC"], ["ETH", "USDT"], ["BTC", "USDT"]];
+
+const availablePools = [
+  { pair: ["ETH", "BTC"], fee: 100 },
+  { pair: ["ETH", "BTC"], fee: 500 },
+  { pair: ["ETH", "BTC"], fee: 3000 },
+  { pair: ["ETH", "BTC"], fee: 10000 },
+  { pair: ["ETH", "USDT"], fee: 100 },
+  { pair: ["ETH", "USDT"], fee: 500 },
+  { pair: ["ETH", "USDT"], fee: 3000 },
+  { pair: ["ETH", "USDT"], fee: 10000 },
+  { pair: ["BTC", "USDT"], fee: 500 },
+  { pair: ["BTC", "USDT"], fee: 3000 },
+  { pair: ["BTC", "USDT"], fee: 10000 }
+];
 
 const routerAbi = [
   "function exactInputSingle(tuple(address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint256 deadline,uint160 sqrtPriceLimitX96)) external payable returns (uint256)"
 ];
+
 const dexAbi = [{
   "inputs": [{ "components": [
     { "internalType": "address", "name": "token0", "type": "address" },
@@ -36,6 +49,7 @@ const dexAbi = [{
   ], "internalType": "struct MintParams", "name": "params", "type": "tuple" }],
   "name": "mint", "outputs": [], "stateMutability": "nonpayable", "type": "function"
 }];
+
 const erc20Abi = [
   "function balanceOf(address) view returns (uint)",
   "function approve(address spender, uint amount) returns (bool)",
@@ -64,8 +78,7 @@ async function showMenu() {
   console.log("1. Swap");
   console.log("2. Add Pool");
   console.log("3. Exit");
-  const choice = await ask("Pilih opsi [1-3]: ");
-  return choice;
+  return await ask("Pilih opsi [1-3]: ");
 }
 
 const getWorkingProvider = async () => {
@@ -86,27 +99,24 @@ async function doSwap() {
     const wallet = new ethers.Wallet(pk, provider);
     const address = await wallet.getAddress();
     const router = new ethers.Contract(routerAddress, routerAbi, wallet);
-    const [from, to] = pairs[Math.floor(Math.random() * pairs.length)].map(sym => TOKENS.find(t => t.symbol === sym));
+    const [from, to] = availablePools[Math.floor(Math.random() * availablePools.length)].pair.map(sym => TOKENS.find(t => t.symbol === sym));
     const token = new ethers.Contract(from.address, erc20Abi, wallet);
     const balance = await token.balanceOf(address);
-    const percent = Math.floor(Math.random() * 4 + 1); // hasil dalam number
-    const amountIn = balance.mul(percent).div(100); // semua pakai BigNumber
-    const minOut = amountIn.div(2);
-    if (amountIn.eq(0)) continue;
+    const percent = BigInt(Math.floor(Math.random() * 4 + 1));
+    const amountIn = balance * percent / 100n;
+    const minOut = amountIn / 2n;
+    if (amountIn === 0n) continue;
     const allowance = await token.allowance(address, routerAddress);
-    if (allowance.lt(amountIn)) {
-      const tx = await token.approve(routerAddress, amountIn);
-      await tx.wait();
-    }
+    if (allowance < amountIn) await (await token.approve(routerAddress, amountIn)).wait();
     const params = {
       tokenIn: from.address,
       tokenOut: to.address,
-      fee: FEE,
+      fee: 100,
       recipient: address,
       amountIn,
       amountOutMinimum: minOut,
       sqrtPriceLimitX96: 0,
-      deadline: Math.floor(Date.now() / 1000) + 600
+      deadline: BigInt(Math.floor(Date.now() / 1000) + 600)
     };
     const tx = await router.exactInputSingle(params);
     console.log(`✅ Swap TX: ${tx.hash}`);
@@ -122,25 +132,23 @@ async function doAddPool() {
       const wallet = new ethers.Wallet(pk, provider);
       const address = await wallet.getAddress();
       const dex = new ethers.Contract(dexAddress, dexAbi, wallet);
-      const [n0, n1] = pairs[Math.floor(Math.random() * pairs.length)];
+      const { pair: [n0, n1], fee } = availablePools[Math.floor(Math.random() * availablePools.length)];
       const a0 = process.env[`${n0}_TOKEN`], a1 = process.env[`${n1}_TOKEN`];
       const t0 = new ethers.Contract(a0, erc20Abi, wallet);
       const t1 = new ethers.Contract(a1, erc20Abi, wallet);
       const b0 = await t0.balanceOf(address), b1 = await t1.balanceOf(address);
-      const amt0 = b0.mul(Math.floor(Math.random() * 6 + 5)).div(100);
-      const amt1 = b1.mul(Math.floor(Math.random() * 6 + 5)).div(100);
-      if (amt0.eq(0) || amt1.eq(0)) continue;
-      if ((await t0.allowance(address, dexAddress)).lt(amt0)) await (await t0.approve(dexAddress, amt0)).wait();
-      if ((await t1.allowance(address, dexAddress)).lt(amt1)) await (await t1.approve(dexAddress, amt1)).wait();
+      const amt0 = b0 * BigInt(Math.floor(Math.random() * 6 + 5)) / 100n;
+      const amt1 = b1 * BigInt(Math.floor(Math.random() * 6 + 5)) / 100n;
+      if (amt0 === 0n || amt1 === 0n) continue;
+      if ((await t0.allowance(address, dexAddress)) < amt0) await (await t0.approve(dexAddress, amt0)).wait();
+      if ((await t1.allowance(address, dexAddress)) < amt1) await (await t1.approve(dexAddress, amt1)).wait();
       const deadline = Math.floor(Date.now() / 1000) + 600;
-      const tickLower = -120;
-      const tickUpper = 120;
-      const mintParams = [a0, a1, FEE, tickLower, tickUpper, amt0, amt1, 0, 0, address, deadline];
-      const tx = await dex.mint(mintParams, { gasLimit: 3000000 });
-      console.log(`✅ Mint TX: ${tx.hash}`);
+      const mintParams = [a0, a1, fee, -887220, 887220, amt0, amt1, 0, 0, address, deadline];
+      const tx = await dex.mint(mintParams);
+      console.log(`✅  Mint TX: ${tx.hash}`);
       await tx.wait();
     } catch (err) {
-      console.error(`❌  Gagal Add Pool: ${err.reason || err.message}`);
+      console.log(`❌   Gagal Add Pool: ${err.message}`);
     }
   }
 }
@@ -148,7 +156,6 @@ async function doAddPool() {
 (async () => {
   showBanner();
   const choice = await showMenu();
-
   if (choice === "1") {
     const repeat = parseInt(await ask("Berapa kali ulangi swap? "), 10);
     for (let i = 1; i <= repeat; i++) {
