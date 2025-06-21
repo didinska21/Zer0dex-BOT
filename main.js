@@ -91,25 +91,40 @@ const withRetry = async (fn, retries = 3, label = '') => {
 };
 
 async function doSwap() {
-  const wallets = Object.entries(process.env).filter(([k]) => k.startsWith("PRIVATE_KEY")).map(([_, v]) => v);
+async function doSwap() {
+  const wallets = Object.entries(process.env)
+    .filter(([k]) => k.startsWith("PRIVATE_KEY"))
+    .map(([_, v]) => v);
+
   for (let pk of wallets) {
     const provider = await getWorkingProvider();
     const wallet = new ethers.Wallet(pk, provider);
     const address = await wallet.getAddress();
     const router = new ethers.Contract(routerAddress, routerAbi, wallet);
-    const [from, to] = pairs[Math.floor(Math.random() * pairs.length)].map(sym => TOKENS.find(t => t.symbol === sym));
+
+    const [from, to] = pairs[Math.floor(Math.random() * pairs.length)].map(
+      sym => TOKENS.find(t => t.symbol === sym)
+    );
+
     const token = new ethers.Contract(from.address, erc20Abi, wallet);
-    const decimals = await token.decimals();
-    const balance = await token.balanceOf(address);
-    const percent = Math.floor(Math.random() * 4 + 1);
-    const amountIn = balance * BigInt(percent) / 100n;
+    const balanceRaw = await token.balanceOf(address);
+    const balance = BigInt(balanceRaw); // Pastikan jadi BigInt
+    const percent = Math.floor(Math.random() * 4 + 1); // antara 1% - 4%
+    const amountIn = (balance * BigInt(percent)) / 100n;
     const minOut = amountIn / 2n;
-    if (amountIn === 0n) continue;
-    const allowance = await token.allowance(address, routerAddress);
-    if (allowance < amountIn) {
-      const tx = await token.approve(routerAddress, amountIn);
-      await tx.wait();
+
+    if (amountIn === 0n) {
+      console.log(`❌ Skip: Balance ${from.symbol} nol`);
+      continue;
     }
+
+    const allowance = await token.allowance(address, routerAddress);
+    if (BigInt(allowance) < amountIn) {
+      console.log(`🔐 Approving ${from.symbol}...`);
+      const approveTx = await token.approve(routerAddress, amountIn);
+      await approveTx.wait();
+    }
+
     const params = {
       tokenIn: from.address,
       tokenOut: to.address,
@@ -120,9 +135,14 @@ async function doSwap() {
       sqrtPriceLimitX96: 0,
       deadline: BigInt(Math.floor(Date.now() / 1000) + 600)
     };
-    const tx = await router.exactInputSingle(params);
-    console.log(`✅ Swap TX: ${tx.hash}`);
-    await tx.wait();
+
+    try {
+      const tx = await router.exactInputSingle(params);
+      console.log(`✅ Swap TX: ${tx.hash}`);
+      await tx.wait();
+    } catch (err) {
+      console.error(`❌ Gagal swap: ${err.message}`);
+    }
   }
 }
 
