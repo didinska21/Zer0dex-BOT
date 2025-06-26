@@ -6,6 +6,9 @@ const figlet = require("figlet");
 const gradient = require("gradient-string");
 
 const FEE = 100;
+const MAX_RETRIES = 5;
+const DELAY_MS = parseInt(process.env.DELAY_MS || "1500", 10);
+
 const routerAddress = process.env.ROUTER_CONTRACT;
 const dexAddress = process.env.ZER0DEX_CONTRACT;
 
@@ -42,6 +45,30 @@ const erc20Abi = [
   "function allowance(address owner, address spender) view returns (uint256)",
   "function decimals() view returns (uint8)"
 ];
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function withRetry(action, label = "Tx") {
+  for (let i = 0; i < MAX_RETRIES; i++) {
+    try {
+      const tx = await action();
+      console.log(`✅ ${label} TX: ${tx.hash}`);
+      await tx.wait();
+      return;
+    } catch (err) {
+      const msg = err?.message || "";
+      if (msg.includes("rate exceeded") || msg.includes("Too many requests")) {
+        console.warn(`⏳ Rate limit, retrying in 2s... (${i + 1}/${MAX_RETRIES})`);
+        await sleep(2000);
+      } else {
+        console.error(`❌ ${label} error: ${msg}`);
+        break;
+      }
+    }
+  }
+}
 
 function showBanner() {
   const banner = figlet.textSync("Zer0dex", { font: "ANSI Shadow" });
@@ -109,8 +136,7 @@ async function doSwap() {
     const allowance = await token.allowance(address, routerAddress);
     if (BigInt(allowance) < amountIn) {
       console.log(`🔐 Approving ${from.symbol}...`);
-      const approveTx = await token.approve(routerAddress, amountIn);
-      await approveTx.wait();
+      await withRetry(() => token.approve(routerAddress, amountIn), `Approve ${from.symbol}`);
     }
 
     const params = {
@@ -124,13 +150,8 @@ async function doSwap() {
       deadline: BigInt(Math.floor(Date.now() / 1000) + 600)
     };
 
-    try {
-      const tx = await router.exactInputSingle(params);
-      console.log(`✅ Swap TX: ${tx.hash}`);
-      await tx.wait();
-    } catch (err) {
-      console.error(`❌ Gagal swap: ${err.message}`);
-    }
+    await withRetry(() => router.exactInputSingle(params), "Swap");
+    await sleep(DELAY_MS);
   }
 }
 
@@ -160,21 +181,16 @@ async function doAddPool() {
     }
 
     if (BigInt(await t0.allowance(address, dexAddress)) < amt0)
-      await (await t0.approve(dexAddress, amt0)).wait();
+      await withRetry(() => t0.approve(dexAddress, amt0), `Approve ${n0}`);
 
     if (BigInt(await t1.allowance(address, dexAddress)) < amt1)
-      await (await t1.approve(dexAddress, amt1)).wait();
+      await withRetry(() => t1.approve(dexAddress, amt1), `Approve ${n1}`);
 
     const deadline = Math.floor(Date.now() / 1000) + 600;
     const mintParams = [a0, a1, FEE, -887220, 887220, amt0, amt1, 0, 0, address, deadline];
 
-    try {
-      const tx = await dex.mint(mintParams);
-      console.log(`✅ Mint TX: ${tx.hash}`);
-      await tx.wait();
-    } catch (err) {
-      console.error(`❌ Gagal Add Pool: ${err.message}`);
-    }
+    await withRetry(() => dex.mint(mintParams), "Add Pool");
+    await sleep(DELAY_MS);
   }
 }
 
